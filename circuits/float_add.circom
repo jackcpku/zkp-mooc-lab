@@ -147,6 +147,14 @@ template CheckBitLength(b) {
     signal output out;
 
     // TODO
+    signal m <-- in % (1 << b);
+    signal r <-- in \ (1 << b);
+    m + r * (1 << b) === in;
+    
+    component ie = IsEqual();
+    ie.in[0] <== in;
+    ie.in[1] <== m;
+    ie.out ==> out;
 }
 
 /*
@@ -195,6 +203,10 @@ template RightShift(shift) {
     signal output y;
 
     // TODO
+    signal r;
+    y <-- x \ (1 << shift);
+    r <-- x % (1 << shift);
+    x === y * (1 << shift) + r;
 }
 
 /*
@@ -255,6 +267,14 @@ template LeftShift(shift_bound) {
     signal output y;
 
     // TODO
+    component lt = LessThan(10); // Potential bug
+    lt.in[0] <== shift;
+    lt.in[1] <== shift_bound;
+    0 === (skip_checks - 1) * (lt.out - 1);
+
+    signal multiplier;
+    multiplier <-- 1 << shift;
+    y <== x * multiplier;
 }
 
 /*
@@ -270,6 +290,25 @@ template MSNZB(b) {
     signal output one_hot[b];
 
     // TODO
+    component iz = IsZero();
+    iz.in <== in;
+    0 === (1 - skip_checks) * iz.out;
+
+    component check_bit_length = CheckBitLength(b);
+    check_bit_length.in <== in;
+    check_bit_length.out === 1;
+
+    component n2b = Num2Bits(b);
+    n2b.in <== in;
+
+    signal prefix_or[b];
+    one_hot[b - 1] <== n2b.bits[b - 1];
+    prefix_or[b - 1] <== n2b.bits[b - 1];
+
+    for (var i = b - 2; i >= 0; i--) {
+        prefix_or[i] <-- prefix_or[i + 1] | n2b.bits[i];
+        one_hot[i] <== n2b.bits[i] * (1 - prefix_or[i + 1]);
+    }
 }
 
 /*
@@ -288,6 +327,27 @@ template Normalize(k, p, P) {
     assert(P > p);
 
     // TODO
+    component iz = IsZero();
+    iz.in <== m;
+    0 === (1 - skip_checks) * iz.out;
+
+    component msnzb = MSNZB(P + 1);
+    msnzb.in <== m;
+    msnzb.skip_checks <== skip_checks;
+
+    signal ell[P + 1];
+    ell[0] <== 0;
+    for (var i = 1; i < P + 1; i++) {
+        ell[i] <== ell[i - 1] + i * msnzb.one_hot[i];
+    }
+
+    component ls = LeftShift(P);
+    ls.x <== m;
+    ls.shift <== P - ell[P];
+    ls.skip_checks <== skip_checks;
+
+    m_out <== ls.y;
+    e_out <== e + ell[P] - p;
 }
 
 /*
@@ -304,4 +364,96 @@ template FloatAdd(k, p) {
     signal output m_out;
 
     // TODO
+    component cwf[2];
+    for (var i = 0; i < 2; i++) {
+        cwf[i] = CheckWellFormedness(k, p);
+        cwf[i].e <== e[i];
+        cwf[i].m <== m[i];
+    }
+
+    signal mgn[2];
+    component ls[2];
+    for (var i = 0; i < 2; i++) {
+        ls[i] = LeftShift(p + 2);
+        ls[i].x <== e[i];
+        ls[i].shift <== p + 1;
+        ls[i].skip_checks <== 1;
+        mgn[i] <== ls[i].y + m[i];
+    }
+
+    signal alpha_e;
+    signal alpha_m;
+    signal beta_e;
+    signal beta_m;
+
+    component lt1; // if mgn_1 > mgn_2:
+    lt1 = LessThan(p + k + 1);
+    lt1.in[0] <== mgn[1];
+    lt1.in[1] <== mgn[0];
+
+    component switcher[2];
+    switcher[0] = Switcher();
+    switcher[0].sel <== lt1.out;
+    switcher[0].L <== e[1];
+    switcher[0].R <== e[0];
+    alpha_e <== switcher[0].outL;
+    beta_e <== switcher[0].outR;
+
+    switcher[1] = Switcher();
+    switcher[1].sel <== lt1.out;
+    switcher[1].L <== m[1];
+    switcher[1].R <== m[0];
+    alpha_m <== switcher[1].outL;
+    beta_m <== switcher[1].outR;
+
+    signal diff <== alpha_e - beta_e;
+
+    component or = OR();
+    component lt2 = LessThan(k + 1); // e ~ 2 ^ k
+    lt2.in[0] <== p + 1;
+    lt2.in[1] <== diff;
+    component iz2 = IsZero();
+    iz2.in <== alpha_e;
+
+    or.a <== lt2.out;
+    or.b <== iz2.out;
+    signal condition <== or.out;
+
+    component ls1 = LeftShift(0);
+    ls1.x <== alpha_m;
+    ls1.shift <== diff;
+    ls1.skip_checks <== 1;
+    signal shifted_alpha_m <== ls1.y;
+
+    signal mm <== shifted_alpha_m + beta_m;
+    signal ee <== beta_e;
+
+    signal conditioned_mm;
+
+    component ite = IfThenElse();
+    ite.cond <== condition;
+    ite.L <== 0;
+    ite.R <== mm;
+    ite.out ==> conditioned_mm;
+
+    component normalize = Normalize(k, p, 2 * p + 1);
+    normalize.e <== ee;
+    normalize.m <== conditioned_mm; // conditioned_mm = 0 when condition is true
+    normalize.skip_checks <== 1;
+
+    component rac = RoundAndCheck(k, p, 2 * p + 1);
+    rac.e <== normalize.e_out;
+    rac.m <== normalize.m_out;
+
+    component ite1 = IfThenElse();
+    ite1.cond <== condition;
+    ite1.L <== alpha_e;
+    ite1.R <== rac.e_out;
+    ite1.out ==> e_out;
+
+    component ite2 = IfThenElse();
+    ite2.cond <== condition;
+    ite2.L <== alpha_m;
+    ite2.R <== rac.m_out;
+    ite2.out ==> m_out;
 }
