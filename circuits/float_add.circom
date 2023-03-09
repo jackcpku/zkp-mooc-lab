@@ -147,13 +147,20 @@ template CheckBitLength(b) {
     signal output out;
 
     // TODO
-    signal m <-- in % (1 << b);
-    signal r <-- in \ (1 << b);
-    m + r * (1 << b) === in;
+    signal ins[b+1];
+    signal rs[b+1];
+    signal qs[b+1];
+    ins[0] <== in;
+    for (var i = 0; i < b; i++) {
+        qs[i] <-- ins[i] \ 2;
+        ins[i+1] <== qs[i];
+        rs[i] <--ins[i] % 2;
+        rs[i] * (1 - rs[i]) === 0;
+        ins[i] === ins[i+1] * 2 + rs[i];
+    }
     
-    component ie = IsEqual();
-    ie.in[0] <== in;
-    ie.in[1] <== m;
+    component ie = IsZero();
+    ie.in <== ins[b];
     ie.out ==> out;
 }
 
@@ -203,10 +210,20 @@ template RightShift(shift) {
     signal output y;
 
     // TODO
-    signal r;
-    y <-- x \ (1 << shift);
-    r <-- x % (1 << shift);
-    x === y * (1 << shift) + r;
+    signal rs[shift+1];
+    signal qs[shift+1];
+    signal xs[shift+1];
+
+    xs[0] <== x;
+    for (var i = 0; i < shift; i++) {
+        rs[i] <-- xs[i] % 2;
+        rs[i] * (1 - rs[i]) === 0;
+        qs[i] <-- xs[i] \ 2;
+        xs[i+1] <== qs[i];
+        xs[i] === xs[i+1] * 2 + rs[i];
+    }
+
+    y <== xs[shift];
 }
 
 /*
@@ -302,11 +319,13 @@ template MSNZB(b) {
     n2b.in <== in;
 
     signal prefix_or[b];
+    signal q[b];
     one_hot[b - 1] <== n2b.bits[b - 1];
     prefix_or[b - 1] <== n2b.bits[b - 1];
 
     for (var i = b - 2; i >= 0; i--) {
-        prefix_or[i] <-- prefix_or[i + 1] | n2b.bits[i];
+        q[i] <-- prefix_or[i + 1] | n2b.bits[i];
+        prefix_or[i] <== q[i];
         one_hot[i] <== n2b.bits[i] * (1 - prefix_or[i + 1]);
     }
 }
