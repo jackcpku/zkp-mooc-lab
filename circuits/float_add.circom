@@ -210,20 +210,20 @@ template RightShift(shift) {
     signal output y;
 
     // TODO
-    signal rs[shift+1];
-    signal qs[shift+1];
-    signal xs[shift+1];
+    assert(shift < 252);
 
-    xs[0] <== x;
-    for (var i = 0; i < shift; i++) {
-        rs[i] <-- xs[i] % 2;
-        rs[i] * (1 - rs[i]) === 0;
-        qs[i] <-- xs[i] \ 2;
-        xs[i+1] <== qs[i];
-        xs[i] === xs[i+1] * 2 + rs[i];
+    signal ybits[252 - shift];
+
+    component n2b = Num2Bits(252);
+    n2b.in <== x;
+
+    for (var i = 0; i < 252 - shift; i++) {
+        ybits[i] <== n2b.bits[i + shift];
     }
 
-    y <== xs[shift];
+    component b2n = Bits2Num(252 - shift);
+    b2n.bits <== ybits;
+    b2n.out ==> y;
 }
 
 /*
@@ -284,14 +284,31 @@ template LeftShift(shift_bound) {
     signal output y;
 
     // TODO
-    component lt = LessThan(10); // Potential bug
-    lt.in[0] <== shift;
-    lt.in[1] <== shift_bound;
-    0 === (skip_checks - 1) * (lt.out - 1);
+    component check_lt = LessThan(12);
+    check_lt.in[0] <== shift;
+    check_lt.in[1] <== shift_bound;
+    0 === (skip_checks - 1) * (check_lt.out - 1);
 
-    signal multiplier;
-    multiplier <-- 1 << shift;
-    y <== x * multiplier;
+    component ite[shift_bound];
+    component lt[shift_bound];
+    signal xs[shift_bound + 1];
+    xs[0] <== x;
+
+    for (var i = 0; i < shift_bound; i++) {
+        ite[i] = IfThenElse();
+        lt[i] = LessThan(12);
+
+        lt[i].in[0] <== i;
+        lt[i].in[1] <== shift;
+        
+        ite[i].cond <== lt[i].out;
+        ite[i].L <== 2;
+        ite[i].R <== 1;
+
+        xs[i + 1] <== xs[i] * ite[i].out;
+    }
+
+    y <== xs[shift_bound];
 }
 
 /*
@@ -438,10 +455,10 @@ template FloatAdd(k, p) {
     or.b <== iz2.out;
     signal condition <== or.out;
 
-    component ls1 = LeftShift(0);
+    component ls1 = LeftShift(251);
     ls1.x <== alpha_m;
     ls1.shift <== diff;
-    ls1.skip_checks <== 1;
+    ls1.skip_checks <== condition;
     signal shifted_alpha_m <== ls1.y;
 
     signal mm <== shifted_alpha_m + beta_m;
@@ -457,8 +474,8 @@ template FloatAdd(k, p) {
 
     component normalize = Normalize(k, p, 2 * p + 1);
     normalize.e <== ee;
-    normalize.m <== conditioned_mm; // conditioned_mm = 0 when condition is true
-    normalize.skip_checks <== 1;
+    normalize.m <== conditioned_mm; // conditioned_mm = 0 when condition is true, or mm would be too large
+    normalize.skip_checks <== condition;
 
     component rac = RoundAndCheck(k, p, 2 * p + 1);
     rac.e <== normalize.e_out;
