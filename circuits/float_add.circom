@@ -215,6 +215,11 @@ template RightShift(b, shift) {
     // TODO
     assert(shift < 252);
 
+    // Check the input length
+    component cbl = CheckBitLength(b);
+    cbl.in <== x;
+    cbl.out === 1;
+
     signal ybits[252 - shift];
 
     component n2b = Num2Bits(252);
