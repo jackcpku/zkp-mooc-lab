@@ -1,3 +1,6 @@
+# Introduction
+This is my implementation of the lab of [the ZKP Mooc](https://zk-learning.org/).
+
 # Assignment: Writing and Proving Arithmetic Circuits
 
 In this assignment you’ll learn about:
